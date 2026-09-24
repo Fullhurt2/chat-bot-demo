@@ -4,6 +4,7 @@
 и понятными исключениями, чтобы хендлеры не зависели от деталей HTTP.
 """
 
+import asyncio
 import logging
 
 import httpx
@@ -15,6 +16,9 @@ logger = logging.getLogger(__name__)
 # Лимит токенов для повторного запроса, когда reasoning-модель израсходовала
 # основной max_tokens и вернула пустой content (см. chat()).
 EMPTY_RESPONSE_RETRY_LIMIT = 5000
+
+# Пауза перед единственным повтором при разовом сбое провайдера (5xx).
+SERVER_ERROR_RETRY_DELAY_SEC = 1.0
 
 
 class LLMError(Exception):
@@ -80,6 +84,17 @@ class LLMClient:
             if adapted is None:
                 break  # нечего адаптировать — вернём ошибку провайдера как есть
             payload = adapted
+            response = await self._send(payload)
+
+        # Разовые сбои провайдера (502/503/504) встречаются и проходят:
+        # делаем одну короткую повторную попытку, прежде чем звать владельца.
+        if response.status_code >= 500:
+            logger.warning(
+                "LLM API вернул статус %d — повторяю запрос через %d сек",
+                response.status_code,
+                SERVER_ERROR_RETRY_DELAY_SEC,
+            )
+            await asyncio.sleep(SERVER_ERROR_RETRY_DELAY_SEC)
             response = await self._send(payload)
 
         choice = self._parse_choice(response)
