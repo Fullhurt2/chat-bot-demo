@@ -62,7 +62,7 @@ style_examples: |
 llm:
   model: ""
   # Температуру можно сделать чуть ниже (0.7-0.8), чтобы бот не придумывал несуществующие дизайны
-  temperature: 0.8 
+  temperature: 1 
   max_tokens: 3500
   timeout_seconds: 15
   reasoning_effort: "medium"
