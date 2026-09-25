@@ -1,6 +1,7 @@
 # Временный тест-скрипт памяти диалога (запускается вручную, в git не включён).
 
 import asyncio
+import dataclasses
 import logging
 import sys
 from collections import deque
@@ -11,6 +12,7 @@ logging.basicConfig(level=logging.CRITICAL)
 
 from handlers.message_handler import MessageProcessor
 from config.settings import get_settings
+from services.fallback import extract_booking_summary
 from services.llm_client import LLMTimeout
 
 
@@ -87,7 +89,10 @@ SlowStubLLM = lambda replies: StubLLM(replies, delay=0.15)
 
 
 def make_processor(replies, cls=StubLLM):
-    return MessageProcessor(get_settings(), cls(replies))
+    # owner_chat_id фиксируем тестовым: уведомления уходят в FakeBot,
+    # иначе проверки зависели бы от chat_id в загруженном конфиге клиента.
+    settings = dataclasses.replace(get_settings(), owner_chat_id=999)
+    return MessageProcessor(settings, cls(replies))
 
 
 passed = failed = 0
@@ -179,6 +184,54 @@ async def main():
     check(f"разбито на {len(parts)} части", len(parts) == 3)
     check("каждая часть <= 4096", all(len(p) <= 4096 for p in parts))
     check("конкатенация без потерь", "".join(parts) == "x" * 9000)
+
+    print("[10] запись: владельцу уходит сводка «ЗАПИСЬ», а не сырое сообщение")
+    ctx10 = FakeContext()
+    proc10 = make_processor([
+        "Отлично! На какой день и время вам удобно? 💅",
+        "[HANDOFF]\nЗАПИСЬ: услуга — маникюр, желаемое время — завтра 15:00\n"
+        "Передаю мастеру, она подтвердит время и адрес.",
+    ])
+    await proc10.handle_message(FakeUpdate("хочу записаться на маникюр"), FakeContext())
+    await proc10.handle_message(FakeUpdate("завтра в 15"), ctx10)
+    owner_msgs10 = [t for _, t in ctx10.bot.sent]
+    check("уведомление владельцу отправлено", len(owner_msgs10) == 1)
+    owner10 = owner_msgs10[-1] if owner_msgs10 else ""
+    check(
+        "владельцу ушла именно сводка",
+        "Сообщение: ЗАПИСЬ: услуга — маникюр, желаемое время — завтра 15:00" in owner10,
+    )
+    check("сырое «завтра в 15» не ушло", "Сообщение: завтра в 15" not in owner10)
+    check("клиенту — вежливая передача", "Передаю ваш вопрос" in proc10._history_for(777)[-1]["content"])
+
+    print("[11] handoff без сводки: владельцу уходит исходный текст")
+    ctx11 = FakeContext()
+    proc11 = make_processor(["[HANDOFF] Не могу проверить статус заказа"])
+    await proc11.handle_message(FakeUpdate("где мой заказ"), ctx11)
+    owner11 = [t for _, t in ctx11.bot.sent][-1]
+    check("сырой текст клиента", "Сообщение: где мой заказ" in owner11)
+    check("сводки нет", "ЗАПИСЬ:" not in owner11)
+
+    print("[12] extract_booking_summary: граничные случаи")
+    check(
+        "сводка в следующей строке",
+        extract_booking_summary("[HANDOFF]\nЗАПИСЬ: услуга — X\nпояснение")
+        == "ЗАПИСЬ: услуга — X",
+    )
+    check(
+        "сводка в той же строке",
+        extract_booking_summary("[HANDOFF] ЗАПИСЬ: услуга — X") == "ЗАПИСЬ: услуга — X",
+    )
+    check(
+        "пустая строка между токеном и сводкой",
+        extract_booking_summary("[HANDOFF]\n\nЗАПИСЬ: услуга — X") == "ЗАПИСЬ: услуга — X",
+    )
+    check("пояснение без сводки", extract_booking_summary("[HANDOFF]\nне знаю ответа") is None)
+    check("без токена", extract_booking_summary("ЗАПИСЬ: услуга — X") is None)
+    check(
+        "«ЗАПИСЬ» не в начале пояснения",
+        extract_booking_summary("[HANDOFF]\nвот ЗАПИСЬ: услуга — X") is None,
+    )
 
     print(f"\nИТОГО: passed={passed}, failed={failed}")
 

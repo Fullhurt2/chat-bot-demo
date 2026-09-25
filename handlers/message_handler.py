@@ -3,6 +3,11 @@
 Сценарий (ТЗ п.5): сообщение -> проверка ключевых слов -> LLM (с краткой
 историей диалога) -> проверка [HANDOFF] -> ответ клиенту ИЛИ вежливое
 сообщение о передаче + уведомление владельцу.
+
+При [HANDOFF] по записи модель формирует сводку «ЗАПИСЬ: услуга — …,
+желаемое время — …» — владельцу уходит она, а не сырое последнее
+сообщение клиента; для остальных handoff и для fallback по ключевым
+словам уходит исходный текст.
 """
 
 import asyncio
@@ -15,7 +20,7 @@ from telegram.ext import ContextTypes
 
 from config.settings import Settings
 from handlers.owner_handler import notify_owner
-from services.fallback import find_trigger, response_is_handoff
+from services.fallback import extract_booking_summary, find_trigger, response_is_handoff
 from services.llm_client import LLMClient, LLMError, LLMTimeout
 
 logger = logging.getLogger(__name__)
@@ -59,6 +64,10 @@ def build_system_prompt(settings: Settings) -> str:
         "2. Если ответа нет в базе знаний или ты не уверен — начни ответ с токена "
         f"[HANDOFF] в первой строке (без форматирования), после него кратко поясни "
         "причину для оператора. Эта часть не будет показана клиенту.\n"
+        "Если это передача записи/бронирования мастеру — сразу после [HANDOFF] "
+        "добавь отдельной строкой сводку в формате «ЗАПИСЬ: услуга — <услуга>, "
+        "желаемое время — <день/час>»: только то, что клиент уже назвал, "
+        "ничего не выдумывая. В остальных случаях сводку не добавляй.\n"
         "3. На реальные вопросы, не связанные с бизнесом (математика, погода, политики, "
         "стихи и т.п.), отвечай токеном [HANDOFF]. НО короткие вежливые реплики — "
         "приветствия, благодарности, «мне грустно», пожелания — отвечай сам, тепло и "
@@ -235,12 +244,17 @@ class MessageProcessor:
         #    Техническая часть клиенту не показывается и в историю не попадает:
         #    клиент видел только вежливое сообщение о передаче.
         if response_is_handoff(reply):
+            # Для записи модель могла дать сводку «ЗАПИСЬ: услуга — …» —
+            # владельцу уходит она (с контекстом услуги и времени), а не
+            # сырое «завтра в 15». Для остальных handoff — исходный текст.
+            summary = extract_booking_summary(reply)
             logger.info(
-                "Fallback | user_id=%s | причина=модель не уверена ([HANDOFF]) | llm_sec=%.2f",
-                user_id, llm_sec,
+                "Fallback | user_id=%s | причина=модель не уверена ([HANDOFF]) | "
+                "сводка по записи=%s | llm_sec=%.2f",
+                user_id, "есть" if summary else "нет", llm_sec,
             )
             await self._do_fallback(
-                context, message, user, text,
+                context, message, user, summary or text,
                 reply=self.settings.fallback_reply,
                 reason="модель не уверена ([HANDOFF])",
             )
@@ -262,14 +276,18 @@ class MessageProcessor:
         for i in range(0, len(text), TELEGRAM_MESSAGE_LIMIT):
             await message.reply_text(text[i:i + TELEGRAM_MESSAGE_LIMIT])
 
-    async def _do_fallback(self, context, message, user, original_text: str, reply: str, reason: str) -> None:
-        """Сообщает клиенту о передаче и пересылает исходное сообщение владельцу."""
+    async def _do_fallback(self, context, message, user, text_for_owner: str, reply: str, reason: str) -> None:
+        """Сообщает клиенту о передаче и пересылает владельцу текст для оператора.
+
+        text_for_owner — структурированная сводка «ЗАПИСЬ: …», если модель её
+        сформировала, иначе исходное сообщение клиента.
+        """
         await self._reply(message, reply)
         delivered = await notify_owner(
             context=context,
             settings=self.settings,
             user=user,
-            message_text=original_text,
+            message_text=text_for_owner,
             reason=reason,
         )
         logger.info(

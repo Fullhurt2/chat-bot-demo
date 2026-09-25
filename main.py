@@ -1,7 +1,8 @@
 """Точка входа: сборка и запуск Telegram-бота.
 
 Запуск: python main.py
-Все настройки берутся из .env и config/client_config.yaml.
+Все настройки берутся из .env и конфига клиента из config/
+(какой файл — переменная CLIENT_CONFIG, по умолчанию client_config.yaml).
 """
 
 import logging
@@ -66,7 +67,8 @@ def main() -> None:
     setup_logging(os.getenv("LOG_LEVEL", "INFO").strip().upper())
     settings = get_settings()
     logger.info(
-        "Запуск бота для %s (модель: %s)", settings.business_name, settings.llm.model
+        "Запуск бота | бизнес: %s | конфиг: %s | модель: %s",
+        settings.business_name, settings.config_file, settings.llm.model,
     )
 
     # Один LLM-клиент на всё приложение (переиспользует HTTP-соединения).
