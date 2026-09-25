@@ -21,6 +21,7 @@ from telegram.ext import ContextTypes
 from config.settings import Settings
 from handlers.owner_handler import notify_owner
 from services.fallback import extract_booking_summary, find_trigger, response_is_handoff
+from services.language import detect_language
 from services.llm_client import LLMClient, LLMError, LLMTimeout
 
 logger = logging.getLogger(__name__)
@@ -91,7 +92,10 @@ def build_system_prompt(settings: Settings) -> str:
         "4. Если клиент просит сменить язык ответа (например: «ответь на казахском», "
         "«я не понимаю русский») или спрашивает, на каких языках ты можешь говорить, — "
         "это не повод для [HANDOFF]: просьба клиента о языке важнее языковой настройки "
-        "по умолчанию — просто отвечай сам, на запрошенном языке.\n"
+        "по умолчанию — просто отвечай сам, на запрошенном языке. Но если просят только "
+        "написать или перевести одно слово/фразу на другом языке (например «скажите "
+        "“рақмет” по-казахски»), отвечай на языке самого вопроса, а перевод давай в "
+        "кавычках, не переключая весь ответ.\n"
         "5. Если клиент пишет, смешивая казахские и русские слова, определяй язык по "
         "грамматической основе сообщения — служебным словам, окончаниям и вопросительным "
         "частицам («барма», «қанша», «бар ма») — а не по заимствованным словам: казахская "
@@ -212,17 +216,21 @@ class MessageProcessor:
         # Фиксируем входящее в историю сразу: дальше каждая ветка
         # дописывает только ответ бота (успех или сообщение о передаче).
         self._remember(history, "user", text)
+        # Служебные фразы бота не генерирует модель — выбираем язык по
+        # сообщению клиента, чтобы казахскому клиенту не ушёл русский текст.
+        lang = detect_language(text)
 
         # 1. Fallback по ключевым словам — до обращения к LLM.
         trigger = find_trigger(text, self.settings.fallback_triggers)
         if trigger:
             logger.info("Fallback | user_id=%s | причина=ключевое слово «%s»", user_id, trigger)
+            reply = self.settings.fallback_reply(lang)
             await self._do_fallback(
                 context, message, user, text,
-                reply=self.settings.fallback_reply,
+                reply=reply,
                 reason=f"ключевое слово «{trigger}»",
             )
-            self._remember(history, "assistant", self.settings.fallback_reply)
+            self._remember(history, "assistant", reply)
             return
 
         # 2. Обращение к LLM. Текущее сообщение передаём отдельно, поэтому в
@@ -234,24 +242,26 @@ class MessageProcessor:
         except LLMTimeout as exc:
             llm_sec = time.monotonic() - start
             logger.warning("Fallback | user_id=%s | причина=%s | llm_sec=%.2f", user_id, exc, llm_sec)
+            reply = self.settings.timeout_reply(lang)
             await self._do_fallback(
                 context, message, user, text,
-                reply=self.settings.timeout_reply,
+                reply=reply,
                 reason=f"таймаут LLM ({self.settings.llm.timeout_seconds} сек)",
             )
-            self._remember(history, "assistant", self.settings.timeout_reply)
+            self._remember(history, "assistant", reply)
             return
         except LLMError as exc:
             llm_sec = time.monotonic() - start
             logger.warning(
                 "Fallback | user_id=%s | причина=%s | llm_sec=%.2f", user_id, exc, llm_sec
             )
+            reply = self.settings.timeout_reply(lang)
             await self._do_fallback(
                 context, message, user, text,
-                reply=self.settings.timeout_reply,
+                reply=reply,
                 reason=f"ошибка LLM: {exc}",
             )
-            self._remember(history, "assistant", self.settings.timeout_reply)
+            self._remember(history, "assistant", reply)
             return
 
         llm_sec = time.monotonic() - start
@@ -269,12 +279,13 @@ class MessageProcessor:
                 "сводка по записи=%s | llm_sec=%.2f",
                 user_id, "есть" if summary else "нет", llm_sec,
             )
+            reply = self.settings.fallback_reply(lang)
             await self._do_fallback(
                 context, message, user, summary or text,
-                reply=self.settings.fallback_reply,
+                reply=reply,
                 reason="модель не уверена ([HANDOFF])",
             )
-            self._remember(history, "assistant", self.settings.fallback_reply)
+            self._remember(history, "assistant", reply)
             return
 
         # 4. Успех: отправляем ответ. Полный текст ответа не логируем (ТЗ п.7).

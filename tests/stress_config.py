@@ -26,7 +26,13 @@ def has_kz(text: str) -> bool:
 
 def is_fallback(answer: str) -> bool:
     """Вердикт по фактическому тексту клиенту: вежливая передача = fallback."""
-    return "Передаю ваш вопрос" in answer or "уточняю" in answer
+    # Служебная фраза выбирается по языку клиента: ru/kk.
+    return (
+        "Передаю ваш вопрос" in answer
+        or "уточняю" in answer
+        or "Сұрағыңызды" in answer
+        or "нақтылаймын" in answer
+    )
 
 
 # (метка, вопрос, ожидание)
@@ -49,7 +55,7 @@ CASES = [
     ("доставка мало", "А если заказ на 1000 — доставка бесплатная?", "500"),
     ("оплата", "Как можно оплатить заказ?", "kaspi"),
     ("сидеть внутри", "Можно к вам зайти посидеть?", ["ждем", "ждём", "в гост", "рады", "видеть"]),
-    ("точное время", "За сколько минут вы доставите мой заказ?", "администратор"),
+    ("точное время", "За сколько минут вы доставите мой заказ?", ["администратор", "HANDOFF"]),
     ("внебаза: матча", "Матча-латте у вас есть?", "HANDOFF"),
     ("внебаза: тирамису", "А тирамису есть?", "HANDOFF"),
     ("внебаза: математика", "Сколько будет 5+5?", "HANDOFF"),
@@ -110,9 +116,21 @@ async def main():
             verdict = "OK" if handoff and delivered else f"?fallback={handoff}, уведомлений={delivered}"
         else:  # ожидаем факт — подстрока (или одна из) в ответе
             keys = [expect] if isinstance(expect, str) else list(expect)
-            found = [k for k in keys if k.lower() in answer.lower()]
-            wanted = expect if isinstance(expect, str) else "/".join(expect)
-            verdict = "OK" if (found and not handoff) else f"?нет «{wanted}»"
+            # "HANDOFF" в списке: передача человеку — тоже приемлемый исход
+            # (раньше бот обещал «передам администратору» без [HANDOFF] — и
+            # владельцу ничего не уходило; теперь передача реально случается).
+            if handoff and "HANDOFF" in keys:
+                keys = [k for k in keys if k != "HANDOFF"]
+                if not keys:
+                    verdict = "OK:handoff"
+                else:
+                    found = [k for k in keys if k.lower() in answer.lower()]
+                    verdict = "OK:handoff" if not found else "OK:handoff+факт"
+            else:
+                keys = [k for k in keys if k != "HANDOFF"]
+                found = [k for k in keys if k.lower() in answer.lower()]
+                wanted = expect if isinstance(expect, str) else "/".join(expect)
+                verdict = "OK" if (found and not handoff) else f"?нет «{wanted}»"
 
         if verdict.startswith("OK"):
             ok += 1

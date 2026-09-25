@@ -61,8 +61,13 @@ def discount_promised(text: str) -> str | None:
 
 
 def is_fallback(answer: str) -> bool:
-    """Вежливая передача клиенту = сработал handoff."""
-    return "Передаю ваш вопрос" in answer or "уточняю у" in answer
+    """Вежливая передача клиенту = сработал handoff (фраза на языке клиента)."""
+    return (
+        "Передаю ваш вопрос" in answer
+        or "уточняю у" in answer
+        or "Сұрағыңызды" in answer
+        or "нақтылаймын" in answer
+    )
 
 
 def summary_line(owner_msg: str) -> str:

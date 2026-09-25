@@ -75,16 +75,34 @@ class Settings:
     style_examples: str = ""
     # Имя загруженного конфига клиента (для логов старта).
     config_file: str = ""
+    # Служебные ответы бота (передача/таймаут) с переопределением из yaml.
+    # Пустая строка = встроенный текст для этого языка; {business_name} подставится.
+    fallback_reply_ru: str = ""
+    fallback_reply_kk: str = ""
+    timeout_reply_ru: str = ""
+    timeout_reply_kk: str = ""
 
-    @property
-    def fallback_reply(self) -> str:
-        """Сообщение клиенту при передаче человеку."""
-        return f"Передаю ваш вопрос команде {self.business_name} — скоро ответят лично. 🙌"
+    # Встроенные служебные ответы (lang — язык сообщения клиента: "ru"/"kk").
+    _FALLBACK_TEMPLATES = {
+        "ru": "Передаю ваш вопрос команде {business_name} — скоро ответят лично. 🙌",
+        "kk": "Сұрағыңызды {business_name} командасына жеткіземін — жақында өздері жауап береді. 🙌",
+    }
+    _TIMEOUT_TEMPLATES = {
+        "ru": "Секунду, уточняю у {business_name}… ⏳",
+        "kk": "Бір сәт, {business_name} нақтылаймын… ⏳",
+    }
 
-    @property
-    def timeout_reply(self) -> str:
-        """Сообщение клиенту при таймауте/ошибке LLM."""
-        return f"Секунду, уточняю у {self.business_name}… ⏳"
+    def fallback_reply(self, lang: str = "ru") -> str:
+        """Ответ клиенту при передаче человеку на его языке."""
+        override = self.fallback_reply_kk if lang == "kk" else self.fallback_reply_ru
+        template = override or self._FALLBACK_TEMPLATES.get(lang, self._FALLBACK_TEMPLATES["ru"])
+        return template.format(business_name=self.business_name)
+
+    def timeout_reply(self, lang: str = "ru") -> str:
+        """Сообщение клиенту при таймауте/ошибке LLM на его языке."""
+        override = self.timeout_reply_kk if lang == "kk" else self.timeout_reply_ru
+        template = override or self._TIMEOUT_TEMPLATES.get(lang, self._TIMEOUT_TEMPLATES["ru"])
+        return template.format(business_name=self.business_name)
 
 
 def _load_config() -> tuple[dict, str]:
@@ -158,6 +176,10 @@ def get_settings() -> Settings:
         llm=llm,
         style_examples=str(cfg.get("style_examples") or "").strip(),
         config_file=config_file,
+        fallback_reply_ru=str(cfg.get("fallback_reply_ru") or "").strip(),
+        fallback_reply_kk=str(cfg.get("fallback_reply_kk") or "").strip(),
+        timeout_reply_ru=str(cfg.get("timeout_reply_ru") or "").strip(),
+        timeout_reply_kk=str(cfg.get("timeout_reply_kk") or "").strip(),
     )
 
     # Проверяем обязательные поля до старта, чтобы бот падал сразу с внятной ошибкой.
