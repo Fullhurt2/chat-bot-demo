@@ -47,7 +47,7 @@ knowledge_base: |
   - НЕ обещать скидки, которых нет в прайсе.
 
 # Замени на реальный Telegram chat_id мастера — иначе уведомления не придут.
-owner_telegram_chat_id: "ЗАМЕНИ_НА_СВОЙ_TELEGRAM_ID_ДЛЯ_ТЕСТА"
+owner_telegram_chat_id: "5248553233"
 
 fallback_triggers:
   - "жалоба"
